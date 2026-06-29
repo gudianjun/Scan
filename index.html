@@ -53,8 +53,10 @@
     .btn-primary { background: #F97316; color: #fff; }
     .btn-ghost { background: transparent; color: #94A3B8; border: 1px solid #334155; margin-top: 10px; }
     .btn-danger { background: #475569; color: #E2E8F0; }
+    .btn-torch { background: #334155; color: #FDE68A; margin-top: 10px; }
+    .btn-torch.on { background: #CA8A04; color: #1F2937; }
     .hidden { display: none !important; }
-    #reader { width: 100%; border-radius: 12px; overflow: hidden; margin-bottom: 16px; }
+    #reader { width: 100%; border-radius: 12px; overflow: hidden; margin-bottom: 12px; background:#000; }
     .user-bar {
       display: flex; justify-content: space-between; align-items: center;
       font-size: 14px; color: #94A3B8; margin-bottom: 16px;
@@ -81,6 +83,9 @@
     .toast.err { background: #DC2626; }
     .hint { font-size: 13px; color: #64748B; text-align: center; margin-top: 8px; }
     .field-hint { font-size: 12px; color: #64748B; margin: -10px 0 16px; }
+    .divider { display:flex; align-items:center; color:#475569; font-size:12px; margin:14px 0; }
+    .divider::before, .divider::after { content:""; flex:1; height:1px; background:#334155; }
+    .divider span { padding:0 10px; }
   </style>
 </head>
 <body>
@@ -112,12 +117,19 @@
     <div id="scan-idle">
       <button class="btn-primary" onclick="startScan()">📷 开始扫描</button>
       <p class="hint">支持条形码与二维码，自动识别类型</p>
+
+      <div class="divider"><span>识别困难时</span></div>
+      <!-- iOS 暗光/小码兜底：调系统相机拍照后解码 -->
+      <button class="btn-ghost" onclick="document.getElementById('photoInput').click()">📸 拍照识别</button>
+      <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden">
+      <p class="hint">用系统相机拍清晰一张，成功率更高</p>
     </div>
 
     <!-- 扫描中 -->
     <div id="scan-active" class="hidden">
       <div id="reader"></div>
-      <button class="btn-danger" onclick="stopScan()">停止</button>
+      <button class="btn-torch hidden" id="torch-btn" onclick="toggleTorch()">💡 手电筒</button>
+      <button class="btn-danger" onclick="stopScan()" style="margin-top:10px">停止</button>
     </div>
 
     <!-- 扫描成功：确认 -->
@@ -144,6 +156,22 @@
     var execUrl = '';
     var html5Qr = null;
     var pendingCode = '';
+    var torchOn = false;
+
+    // 限定码制范围：减少误判、提升命中
+    var FORMATS = [
+      Html5QrcodeSupportedFormats.QR_CODE,
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.CODE_128,
+      Html5QrcodeSupportedFormats.CODE_39,
+      Html5QrcodeSupportedFormats.CODE_93,
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.UPC_E,
+      Html5QrcodeSupportedFormats.ITF,
+      Html5QrcodeSupportedFormats.CODABAR,
+      Html5QrcodeSupportedFormats.DATA_MATRIX
+    ];
 
     // 启动时回填上次的地址和名字
     (function init() {
@@ -154,9 +182,10 @@
     })();
 
     function readInputs() {
-      var url = document.getElementById('execUrl').value.trim();
-      var name = document.getElementById('username').value.trim();
-      return { url: url, name: name };
+      return {
+        url: document.getElementById('execUrl').value.trim(),
+        name: document.getElementById('username').value.trim()
+      };
     }
 
     function validUrl(url) {
@@ -178,12 +207,11 @@
       document.getElementById('step-scan').classList.remove('hidden');
     }
 
-    // 发送数据到 GAS。action: 'append' 写入 / 'ping' 测试
     function postToGas(payload) {
       var target = payload._url || execUrl;
       return fetch(target, {
         method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // 关键：避开 CORS 预检
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // 避开 CORS 预检
         body: JSON.stringify(payload)
       }).then(function(r) { return r.json(); });
     }
@@ -218,23 +246,82 @@
       document.getElementById('scan-result').classList.add('hidden');
     }
 
+    // 自适应扫描框：取画面较小边的 70%，正方形，兼顾二维码与条形码
+    function qrboxFn(vw, vh) {
+      var minEdge = Math.min(vw, vh);
+      var size = Math.floor(minEdge * 0.7);
+      return { width: size, height: size };
+    }
+
     function startScan() {
       document.getElementById('scan-idle').classList.add('hidden');
       document.getElementById('scan-result').classList.add('hidden');
       document.getElementById('scan-active').classList.remove('hidden');
 
-      html5Qr = new Html5Qrcode('reader');
-      var config = { fps: 10, qrbox: { width: 250, height: 150 } };
+      // 实例配置：优先原生 BarcodeDetector（iOS 不支持会自动回退到 ZXing），限定码制
+      html5Qr = new Html5Qrcode('reader', {
+        formatsToSupport: FORMATS,
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+      });
+
+      var config = {
+        fps: 15,
+        qrbox: qrboxFn,
+        aspectRatio: 1.0,
+        // 高分辨率 + 连续对焦：iOS 上提升识别率最有效的手段
+        videoConstraints: {
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          focusMode: 'continuous',
+          advanced: [{ focusMode: 'continuous' }]
+        }
+      };
 
       html5Qr.start(
-        { facingMode: 'environment' },
+        undefined,        // 用 videoConstraints 里的 facingMode 选摄像头
         config,
         onScanSuccess,
         function(err) { /* 每帧未识别，忽略 */ }
-      ).catch(function(err) {
+      ).then(function() {
+        setupTorchButton(); // 启动后检测是否支持手电筒
+      }).catch(function(err) {
         showToast('无法打开摄像头：' + err, true);
         resetToIdle();
       });
+    }
+
+    // 仅当设备/浏览器支持 torch 时才显示手电筒按钮（iOS 通常不支持，自动隐藏）
+    function setupTorchButton() {
+      var btn = document.getElementById('torch-btn');
+      torchOn = false;
+      btn.classList.remove('on');
+      btn.textContent = '💡 手电筒';
+      try {
+        var caps = html5Qr.getRunningTrackCapabilities();
+        if (caps && caps.torch) {
+          btn.classList.remove('hidden');
+        } else {
+          btn.classList.add('hidden');
+        }
+      } catch (e) {
+        btn.classList.add('hidden');
+      }
+    }
+
+    function toggleTorch() {
+      if (!html5Qr) return;
+      torchOn = !torchOn;
+      html5Qr.applyVideoConstraints({ advanced: [{ torch: torchOn }] })
+        .then(function() {
+          var btn = document.getElementById('torch-btn');
+          if (torchOn) { btn.classList.add('on'); btn.textContent = '💡 关闭手电筒'; }
+          else { btn.classList.remove('on'); btn.textContent = '💡 手电筒'; }
+        })
+        .catch(function() {
+          torchOn = !torchOn; // 回滚
+          showToast('该设备不支持手电筒', true);
+        });
     }
 
     function onScanSuccess(decodedText, decodedResult) {
@@ -242,15 +329,24 @@
       var fmt = (decodedResult && decodedResult.result && decodedResult.result.format)
                 ? decodedResult.result.format.formatName : '';
       stopScan(function() {
-        document.getElementById('result-code').textContent = decodedText;
-        document.getElementById('result-type').textContent = fmt ? ('类型：' + fmt) : '';
-        document.getElementById('scan-active').classList.add('hidden');
-        document.getElementById('scan-result').classList.remove('hidden');
+        showResult(decodedText, fmt);
       });
     }
 
+    function showResult(text, fmt) {
+      document.getElementById('result-code').textContent = text;
+      document.getElementById('result-type').textContent = fmt ? ('类型：' + fmt) : '';
+      document.getElementById('scan-idle').classList.add('hidden');
+      document.getElementById('scan-active').classList.add('hidden');
+      document.getElementById('scan-result').classList.remove('hidden');
+    }
+
     function stopScan(callback) {
-      if (html5Qr) {
+      var btn = document.getElementById('torch-btn');
+      if (btn) { btn.classList.add('hidden'); btn.classList.remove('on'); }
+      torchOn = false;
+
+      if (html5Qr && html5Qr.getState && html5Qr.getState() === Html5QrcodeScannerState.SCANNING) {
         html5Qr.stop().then(function() {
           html5Qr.clear();
           html5Qr = null;
@@ -260,12 +356,34 @@
           if (callback) callback();
         });
       } else {
+        if (html5Qr) { try { html5Qr.clear(); } catch(e){} html5Qr = null; }
         if (document.getElementById('scan-result').classList.contains('hidden')) {
           resetToIdle();
         }
         if (callback) callback();
       }
     }
+
+    // iOS 兜底：拍照后用 scanFile 解码
+    document.getElementById('photoInput').addEventListener('change', function(e) {
+      var file = e.target.files && e.target.files[0];
+      if (!file) return;
+      var fileScanner = new Html5Qrcode('reader', {
+        formatsToSupport: FORMATS,
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+      });
+      showToast('识别中...');
+      fileScanner.scanFile(file, false)
+        .then(function(decodedText) {
+          fileScanner.clear();
+          showResult(decodedText, '图片识别');
+        })
+        .catch(function(err) {
+          try { fileScanner.clear(); } catch(ex){}
+          showToast('未能识别，请靠近、对焦后重拍', true);
+        });
+      e.target.value = ''; // 允许重复选同一文件
+    });
 
     function cancelResult() {
       pendingCode = '';
