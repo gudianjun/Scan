@@ -277,20 +277,20 @@
       var config = {
         fps: 15,
         qrbox: qrboxFn,
-        aspectRatio: 1.0
+        aspectRatio: 1.0,
+        // 高分辨率 + 连续对焦放这里（第一个参数只能含 1 个 key，不能放这些）
+        videoConstraints: {
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          focusMode: 'continuous',
+          advanced: [{ focusMode: 'continuous' }]
+        }
       };
 
-      // 第一个参数（cameraIdOrConfig）必填：用约束对象选后置摄像头并请求高分辨率+连续对焦
-      var cameraConstraints = {
-        facingMode: 'environment',
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        focusMode: 'continuous',
-        advanced: [{ focusMode: 'continuous' }]
-      };
-
+      // 第一个参数（cameraIdOrConfig）必填，且作为对象时只能有 1 个 key
       html5Qr.start(
-        cameraConstraints,
+        { facingMode: 'environment' },
         config,
         onScanSuccess,
         function(err) { /* 每帧未识别，忽略 */ }
