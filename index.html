@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>条码扫描记录</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, "Segoe UI", "Helvetica Neue", "Hiragino Sans", "Microsoft YaHei", sans-serif;
+      background: #0F172A;
+      color: #E2E8F0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+    .card {
+      width: 100%;
+      max-width: 480px;
+      background: #1E293B;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    }
+    h1 { font-size: 20px; margin-bottom: 4px; color: #F97316; text-align: center; }
+    .sub { font-size: 12px; color: #64748B; text-align: center; margin-bottom: 20px; }
+    label { display: block; font-size: 14px; margin-bottom: 8px; color: #94A3B8; }
+    input[type=text], input[type=url] {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #0F172A;
+      color: #E2E8F0;
+      font-size: 16px;
+      margin-bottom: 16px;
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .2s;
+    }
+    button:active { opacity: .8; }
+    button:disabled { opacity: .5; cursor: default; }
+    .btn-primary { background: #F97316; color: #fff; }
+    .btn-ghost { background: transparent; color: #94A3B8; border: 1px solid #334155; margin-top: 10px; }
+    .btn-danger { background: #475569; color: #E2E8F0; }
+    .hidden { display: none !important; }
+    #reader { width: 100%; border-radius: 12px; overflow: hidden; margin-bottom: 16px; }
+    .user-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 14px; color: #94A3B8; margin-bottom: 16px;
+    }
+    .user-bar b { color: #E2E8F0; }
+    .result-box {
+      background: #0F172A; border: 1px solid #334155; border-radius: 12px;
+      padding: 18px; margin-bottom: 16px;
+    }
+    .result-box .code {
+      font-size: 18px; font-weight: 700; color: #F97316;
+      word-break: break-all; margin: 8px 0;
+    }
+    .result-box .meta { font-size: 13px; color: #94A3B8; }
+    .btn-row { display: flex; gap: 10px; }
+    .btn-row button { margin: 0; }
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: #16A34A; color: #fff; padding: 12px 20px; border-radius: 10px;
+      font-size: 14px; opacity: 0; transition: opacity .3s; pointer-events: none;
+      z-index: 999; max-width: 90%; text-align: center;
+    }
+    .toast.show { opacity: 1; }
+    .toast.err { background: #DC2626; }
+    .hint { font-size: 13px; color: #64748B; text-align: center; margin-top: 8px; }
+    .field-hint { font-size: 12px; color: #64748B; margin: -10px 0 16px; }
+  </style>
+</head>
+<body>
+
+  <!-- 第一步：配置 GAS 地址 + 用户名 -->
+  <div class="card" id="step-login">
+    <h1>条码扫描记录</h1>
+    <div class="sub">扫描后自动写入 Google 表格</div>
+
+    <label for="execUrl">GAS Web App 地址</label>
+    <input type="url" id="execUrl" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+    <div class="field-hint">由客户提供，以 /exec 结尾</div>
+
+    <label for="username">用户名</label>
+    <input type="text" id="username" placeholder="任意名称" autocomplete="off">
+
+    <button class="btn-primary" onclick="enterApp()">进入</button>
+    <button class="btn-ghost" onclick="testConn()" id="test-btn">测试连接</button>
+  </div>
+
+  <!-- 第二步：扫描界面 -->
+  <div class="card hidden" id="step-scan">
+    <div class="user-bar">
+      <span>当前用户：<b id="user-display"></b></span>
+      <span style="cursor:pointer;color:#F97316" onclick="logout()">设置</span>
+    </div>
+
+    <!-- 扫描就绪 -->
+    <div id="scan-idle">
+      <button class="btn-primary" onclick="startScan()">📷 开始扫描</button>
+      <p class="hint">支持条形码与二维码，自动识别类型</p>
+    </div>
+
+    <!-- 扫描中 -->
+    <div id="scan-active" class="hidden">
+      <div id="reader"></div>
+      <button class="btn-danger" onclick="stopScan()">停止</button>
+    </div>
+
+    <!-- 扫描成功：确认 -->
+    <div id="scan-result" class="hidden">
+      <div class="result-box">
+        <div class="meta">识别到内容：</div>
+        <div class="code" id="result-code"></div>
+        <div class="meta" id="result-type"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn-danger" onclick="cancelResult()">取消</button>
+        <button class="btn-primary" onclick="submitResult()" id="submit-btn">提交</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    var LS_URL = 'scanner_exec_url';
+    var LS_NAME = 'scanner_user_name';
+
+    var currentUser = '';
+    var execUrl = '';
+    var html5Qr = null;
+    var pendingCode = '';
+
+    // 启动时回填上次的地址和名字
+    (function init() {
+      var savedUrl = localStorage.getItem(LS_URL);
+      var savedName = localStorage.getItem(LS_NAME);
+      if (savedUrl) document.getElementById('execUrl').value = savedUrl;
+      if (savedName) document.getElementById('username').value = savedName;
+    })();
+
+    function readInputs() {
+      var url = document.getElementById('execUrl').value.trim();
+      var name = document.getElementById('username').value.trim();
+      return { url: url, name: name };
+    }
+
+    function validUrl(url) {
+      return /^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url);
+    }
+
+    function enterApp() {
+      var v = readInputs();
+      if (!validUrl(v.url)) { showToast('地址无效，需以 /exec 结尾', true); return; }
+      if (!v.name) { showToast('请输入用户名', true); return; }
+
+      execUrl = v.url;
+      currentUser = v.name;
+      localStorage.setItem(LS_URL, v.url);
+      localStorage.setItem(LS_NAME, v.name);
+
+      document.getElementById('user-display').textContent = v.name;
+      document.getElementById('step-login').classList.add('hidden');
+      document.getElementById('step-scan').classList.remove('hidden');
+    }
+
+    // 发送数据到 GAS。action: 'append' 写入 / 'ping' 测试
+    function postToGas(payload) {
+      var target = payload._url || execUrl;
+      return fetch(target, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // 关键：避开 CORS 预检
+        body: JSON.stringify(payload)
+      }).then(function(r) { return r.json(); });
+    }
+
+    function testConn() {
+      var v = readInputs();
+      if (!validUrl(v.url)) { showToast('地址无效，需以 /exec 结尾', true); return; }
+      var btn = document.getElementById('test-btn');
+      btn.disabled = true; btn.textContent = '测试中...';
+      postToGas({ _url: v.url, action: 'ping' })
+        .then(function(res) {
+          btn.disabled = false; btn.textContent = '测试连接';
+          if (res && res.ok) showToast('连接成功 ✓');
+          else showToast('返回异常：' + (res && res.error ? res.error : '未知'), true);
+        })
+        .catch(function(err) {
+          btn.disabled = false; btn.textContent = '测试连接';
+          showToast('连接失败：' + err, true);
+        });
+    }
+
+    function logout() {
+      stopScan();
+      document.getElementById('step-scan').classList.add('hidden');
+      document.getElementById('step-login').classList.remove('hidden');
+      resetToIdle();
+    }
+
+    function resetToIdle() {
+      document.getElementById('scan-idle').classList.remove('hidden');
+      document.getElementById('scan-active').classList.add('hidden');
+      document.getElementById('scan-result').classList.add('hidden');
+    }
+
+    function startScan() {
+      document.getElementById('scan-idle').classList.add('hidden');
+      document.getElementById('scan-result').classList.add('hidden');
+      document.getElementById('scan-active').classList.remove('hidden');
+
+      html5Qr = new Html5Qrcode('reader');
+      var config = { fps: 10, qrbox: { width: 250, height: 150 } };
+
+      html5Qr.start(
+        { facingMode: 'environment' },
+        config,
+        onScanSuccess,
+        function(err) { /* 每帧未识别，忽略 */ }
+      ).catch(function(err) {
+        showToast('无法打开摄像头：' + err, true);
+        resetToIdle();
+      });
+    }
+
+    function onScanSuccess(decodedText, decodedResult) {
+      pendingCode = decodedText;
+      var fmt = (decodedResult && decodedResult.result && decodedResult.result.format)
+                ? decodedResult.result.format.formatName : '';
+      stopScan(function() {
+        document.getElementById('result-code').textContent = decodedText;
+        document.getElementById('result-type').textContent = fmt ? ('类型：' + fmt) : '';
+        document.getElementById('scan-active').classList.add('hidden');
+        document.getElementById('scan-result').classList.remove('hidden');
+      });
+    }
+
+    function stopScan(callback) {
+      if (html5Qr) {
+        html5Qr.stop().then(function() {
+          html5Qr.clear();
+          html5Qr = null;
+          if (callback) callback();
+        }).catch(function() {
+          html5Qr = null;
+          if (callback) callback();
+        });
+      } else {
+        if (document.getElementById('scan-result').classList.contains('hidden')) {
+          resetToIdle();
+        }
+        if (callback) callback();
+      }
+    }
+
+    function cancelResult() {
+      pendingCode = '';
+      resetToIdle();
+    }
+
+    function submitResult() {
+      var btn = document.getElementById('submit-btn');
+      btn.disabled = true; btn.textContent = '提交中...';
+      postToGas({ action: 'append', name: currentUser, code: pendingCode })
+        .then(function(res) {
+          btn.disabled = false; btn.textContent = '提交';
+          if (res && res.ok) {
+            showToast('已提交：' + res.code);
+            resetToIdle();
+          } else {
+            showToast('提交失败：' + (res && res.error ? res.error : '未知错误'), true);
+          }
+        })
+        .catch(function(err) {
+          btn.disabled = false; btn.textContent = '提交';
+          showToast('提交失败：' + err, true);
+        });
+    }
+
+    var toastTimer = null;
+    function showToast(msg, isErr) {
+      var t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = 'toast show' + (isErr ? ' err' : '');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function() {
+        t.className = 'toast' + (isErr ? ' err' : '');
+      }, 2800);
+    }
+
+    document.getElementById('username').addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') enterApp();
+    });
+  </script>
+</body>
+</html>
