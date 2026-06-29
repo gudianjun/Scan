@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>条码扫描记录</title>
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <!-- 本地引用，与 index.html 同目录 -->
+  <script src="html5-qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -158,20 +159,28 @@
     var pendingCode = '';
     var torchOn = false;
 
-    // 限定码制范围：减少误判、提升命中
-    var FORMATS = [
-      Html5QrcodeSupportedFormats.QR_CODE,
-      Html5QrcodeSupportedFormats.EAN_13,
-      Html5QrcodeSupportedFormats.EAN_8,
-      Html5QrcodeSupportedFormats.CODE_128,
-      Html5QrcodeSupportedFormats.CODE_39,
-      Html5QrcodeSupportedFormats.CODE_93,
-      Html5QrcodeSupportedFormats.UPC_A,
-      Html5QrcodeSupportedFormats.UPC_E,
-      Html5QrcodeSupportedFormats.ITF,
-      Html5QrcodeSupportedFormats.CODABAR,
-      Html5QrcodeSupportedFormats.DATA_MATRIX
-    ];
+    // 限定码制范围：减少误判、提升命中。延迟求值，避免库未加载完就引用全局变量报错
+    function getFormats() {
+      return [
+        Html5QrcodeSupportedFormats.QR_CODE,
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.CODE_93,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.ITF,
+        Html5QrcodeSupportedFormats.CODABAR,
+        Html5QrcodeSupportedFormats.DATA_MATRIX
+      ];
+    }
+
+    // 库是否已加载就绪
+    function libReady() {
+      return typeof Html5Qrcode !== 'undefined'
+          && typeof Html5QrcodeSupportedFormats !== 'undefined';
+    }
 
     // 启动时回填上次的地址和名字
     (function init() {
@@ -254,13 +263,14 @@
     }
 
     function startScan() {
+      if (!libReady()) { showToast('扫描库加载中，请稍候重试', true); return; }
       document.getElementById('scan-idle').classList.add('hidden');
       document.getElementById('scan-result').classList.add('hidden');
       document.getElementById('scan-active').classList.remove('hidden');
 
       // 实例配置：优先原生 BarcodeDetector（iOS 不支持会自动回退到 ZXing），限定码制
       html5Qr = new Html5Qrcode('reader', {
-        formatsToSupport: FORMATS,
+        formatsToSupport: getFormats(),
         experimentalFeatures: { useBarCodeDetectorIfSupported: true }
       });
 
@@ -346,7 +356,8 @@
       if (btn) { btn.classList.add('hidden'); btn.classList.remove('on'); }
       torchOn = false;
 
-      if (html5Qr && html5Qr.getState && html5Qr.getState() === Html5QrcodeScannerState.SCANNING) {
+      if (html5Qr && html5Qr.getState && typeof Html5QrcodeScannerState !== 'undefined'
+          && html5Qr.getState() === Html5QrcodeScannerState.SCANNING) {
         html5Qr.stop().then(function() {
           html5Qr.clear();
           html5Qr = null;
@@ -368,8 +379,9 @@
     document.getElementById('photoInput').addEventListener('change', function(e) {
       var file = e.target.files && e.target.files[0];
       if (!file) return;
+      if (!libReady()) { showToast('扫描库加载中，请稍候重试', true); e.target.value=''; return; }
       var fileScanner = new Html5Qrcode('reader', {
-        formatsToSupport: FORMATS,
+        formatsToSupport: getFormats(),
         experimentalFeatures: { useBarCodeDetectorIfSupported: true }
       });
       showToast('识别中...');
